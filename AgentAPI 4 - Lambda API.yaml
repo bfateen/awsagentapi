@@ -5,6 +5,9 @@ Parameters:
   BedrockAgentId:
     Type: String
     Description: 'ID of the Bedrock Agent to interact with'
+  LayerBucketName:
+    Type: String
+    Description: 'Name of the S3 bucket containing the Lambda Layer'
 
 Resources:
   LayerBucket:
@@ -19,7 +22,7 @@ Resources:
       CompatibleRuntimes:
         - nodejs18.x
       Content:
-        S3Bucket: 'base-agent-setup1-bedrock-layer-bucket'
+        S3Bucket: !Ref LayerBucketName
         S3Key: 'bedrock-layer.zip'
       Description: 'AWS SDK v3 for Bedrock'
       LayerName: 'aws-sdk-layer'
