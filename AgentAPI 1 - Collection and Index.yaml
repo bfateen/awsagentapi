@@ -9,7 +9,7 @@ Parameters:
 
   AOSSCollectionName:
     Description: Name of the Amazon OpenSearch Service Serverless (AOSS) collection.
-    Default: rag-bedrock-kb
+    Default: instantagent-col
     Type: String
     MinLength: 1
     MaxLength: 21
@@ -18,11 +18,11 @@ Parameters:
 
   AOSSIndexName:
     Description: Name of the vector index in the Amazon OpenSearch Service Serverless (AOSS) collection.
-    Default: rag-bedrock-readthedocs-io
+    Default: instantagent-io
     Type: String
 
   KnowledgeBaseName:
-    Default: rag-bedrock-kb
+    Default: instantagent-kb
     Type: String
     Description: The name of the knowledge base.
 
@@ -32,7 +32,7 @@ Parameters:
     Description: The description of the knowledge base.
 
   AgentName:
-    Default: rag-bedrock-agent
+    Default: instantagent1
     Type: String
     Description: The name of the agent.
 
