@@ -1,0 +1,149 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template to create Lambda function and API Gateway for Bedrock Agent interaction'
+
+Parameters:
+  BedrockAgentId:
+    Type: String
+    Description: 'ID of the Bedrock Agent to interact with'
+
+Resources:
+  LayerBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+
+  AwsSdkLayer:
+    Type: 'AWS::Lambda::LayerVersion'
+    Properties:
+      CompatibleRuntimes:
+        - nodejs18.x
+      Content:
+        S3Bucket: 'base-agent-setup1-bedrock-layer-bucket'
+        S3Key: 'bedrock-layer.zip'
+      Description: 'AWS SDK v3 for Bedrock'
+      LayerName: 'aws-sdk-layer'
+
+  BedrockAgentLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: BedrockAgentAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock:InvokeAgent'
+                Resource: 
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent/${BedrockAgentId}'
+
+  BedrockAgentLambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt BedrockAgentLambdaRole.Arn
+      Code:
+        ZipFile: |
+          const { BedrockRuntimeClient, InvokeAgentCommand } = require("@aws-sdk/client-bedrock-runtime");
+
+          const bedrockClient = new BedrockRuntimeClient({ region: process.env.AWS_REGION });
+
+          exports.handler = async (event) => {
+            const { prompt } = JSON.parse(event.body);
+            const params = {
+              agentId: process.env.AGENT_ID,
+              agentAliasId: 'LATEST',
+              sessionId: event.requestContext.requestId,
+              inputText: prompt
+            };
+
+            try {
+              const command = new InvokeAgentCommand(params);
+              const response = await bedrockClient.send(command);
+              
+              return {
+                statusCode: 200,
+                headers: {
+                  'Access-Control-Allow-Origin': '*',
+                  'Access-Control-Allow-Credentials': true,
+                },
+                body: JSON.stringify(response)
+              };
+            } catch (error) {
+              console.error('Error:', error);
+              return {
+                statusCode: 500,
+                headers: {
+                  'Access-Control-Allow-Origin': '*',
+                  'Access-Control-Allow-Credentials': true,
+                },
+                body: JSON.stringify({ error: 'Failed to interact with Bedrock Agent', details: error.message })
+              };
+            }
+          };
+      Runtime: nodejs18.x
+      Timeout: 30
+      Layers:
+        - !Ref AwsSdkLayer
+      Environment:
+        Variables:
+          AGENT_ID: !Ref BedrockAgentId
+
+  BedrockAgentApi:
+    Type: 'AWS::ApiGateway::RestApi'
+    Properties:
+      Name: BedrockAgentAPI
+
+  BedrockAgentApiResource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      ParentId: !GetAtt BedrockAgentApi.RootResourceId
+      PathPart: 'chat'
+      RestApiId: !Ref BedrockAgentApi
+
+  BedrockAgentApiMethod:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      HttpMethod: POST
+      ResourceId: !Ref BedrockAgentApiResource
+      RestApiId: !Ref BedrockAgentApi
+      AuthorizationType: NONE
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub 
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations
+          - LambdaArn: !GetAtt BedrockAgentLambda.Arn
+
+  BedrockAgentApiDeployment:
+    Type: 'AWS::ApiGateway::Deployment'
+    DependsOn: BedrockAgentApiMethod
+    Properties:
+      RestApiId: !Ref BedrockAgentApi
+      StageName: prod
+
+  BedrockAgentLambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !GetAtt BedrockAgentLambda.Arn
+      Action: 'lambda:InvokeFunction'
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BedrockAgentApi}/*/*/*
+
+Outputs:
+  ApiEndpoint:
+    Description: 'API Gateway endpoint URL for prod stage'
+    Value: !Sub https://${BedrockAgentApi}.execute-api.${AWS::Region}.amazonaws.com/prod/chat
+  LayerBucketName:
+    Description: 'Name of the S3 bucket for the Lambda Layer'
+    Value: !Ref LayerBucket

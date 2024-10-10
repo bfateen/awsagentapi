@@ -1,0 +1,110 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to create an S3 bucket, package boto3 into a zip file, and upload it
+
+Resources:
+  # Create S3 Bucket
+  BedrockLayerS3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-bedrock-layer-bucket'
+      AccessControl: Private
+
+  # Lambda Execution Role for S3 Access
+  LambdaExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: "S3AccessPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "s3:PutObject"
+                  - "s3:GetObject"
+                  - "s3:ListBucket"
+                Resource: "*"
+
+  # Lambda Function to Package boto3 and Upload to S3
+  PackageAndUploadLambdaFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      FunctionName: "PackageAndUploadLambdaFunction"
+      Handler: "index.handler"
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: "python3.9"
+      Timeout: 300
+      MemorySize: 512
+      Code:
+        ZipFile: |
+          import os
+          import subprocess
+          import zipfile
+          import boto3
+          import cfnresponse
+
+          def handler(event, context):
+              try:
+                  # Create directories
+                  layer_dir = "/tmp/bedrock-layer"
+                  python_dir = os.path.join(layer_dir, "python")
+                  os.makedirs(python_dir, exist_ok=True)
+
+                  # Install boto3 into the layer's python directory
+                  print("Installing boto3...")
+                  subprocess.check_call(["pip3", "install", "-t", python_dir, "boto3"])
+                  
+                  # Zip the layer content
+                  zip_file_path = "/tmp/bedrock-layer.zip"
+                  print(f"Creating zip file at {zip_file_path}...")
+                  with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                      for root, dirs, files in os.walk(layer_dir):
+                          for file in files:
+                              file_path = os.path.join(root, file)
+                              zipf.write(file_path, os.path.relpath(file_path, layer_dir))
+                  print(f"Zip file created successfully at {zip_file_path}.")
+                  
+                  # Upload the zip file to S3
+                  s3_client = boto3.client('s3')
+                  bucket_name = event['ResourceProperties']['DestinationBucketName']
+                  s3_key = "bedrock-layer.zip"
+                  print(f"Uploading {zip_file_path} to s3://{bucket_name}/{s3_key}...")
+                  s3_client.upload_file(zip_file_path, bucket_name, s3_key)
+                  print(f"Upload successful.")
+
+                  # Signal success
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                      "Message": "Layer packaged and uploaded to S3 successfully.",
+                      "S3Bucket": bucket_name,
+                      "S3Key": s3_key
+                  })
+              except Exception as e:
+                  print(f"Error during packaging or uploading layer: {e}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {
+                      "Message": str(e)
+                  })
+
+  # Custom Resource to Trigger the Lambda Function
+  PackageAndUploadCustomResource:
+    Type: "AWS::CloudFormation::CustomResource"
+    Properties:
+      ServiceToken: !GetAtt PackageAndUploadLambdaFunction.Arn
+      DestinationBucketName: !Ref BedrockLayerS3Bucket
+
+Outputs:
+  S3BucketName:
+    Description: "Name of the S3 bucket where the file was uploaded"
+    Value: !Ref BedrockLayerS3Bucket
+
+  S3FileKey:
+    Description: "S3 key of the uploaded file"
+    Value: "bedrock-layer.zip"

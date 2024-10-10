@@ -1,0 +1,39 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template to create a billing alert for when the monthly bill exceeds $10'
+
+Parameters:
+  Email:
+    Type: String
+    Description: Email address to send the alert to
+
+Resources:
+  BillingAlarmTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref Email
+
+  BillingAlarm:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmDescription: 'Alarm when monthly bill exceeds $10'
+      AlarmName: MonthlyBillingAlert
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref BillingAlarmTopic
+      MetricName: EstimatedCharges
+      Namespace: AWS/Billing
+      Statistic: Maximum
+      Period: 21600  # 6 hours
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: Currency
+          Value: USD
+
+Outputs:
+  BillingAlarmTopicARN:
+    Description: 'ARN of the SNS topic for billing alerts'
+    Value: !Ref BillingAlarmTopic
