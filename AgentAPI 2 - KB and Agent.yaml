@@ -3,7 +3,7 @@ Description: 'Serverless RAG Q&A application using Knowledge Base , Agents, Open
 
 Parameters:
   KnowledgeBaseName:
-    Default: rag-bedrock-kb
+    Default: instantagent-kb
     Type: String
     Description: The name of the knowledge base.
   KnowledgeBaseDescription:
@@ -15,11 +15,11 @@ Parameters:
     Description: Execution Role for Knowledge Base Arn.
   
   AgentName:
-    Default: rag-bedrock-agent
+    Default: instantagent1
     Type: String
     Description: The name of the agent.
   AOSSIndexName:
-    Default: rag-bedrock-readthedocs-io
+    Default: instantagent-io
     Type: String
     Description: Name of the vector index in the Amazon OpenSearch Service Serverless (AOSS) collection. You can get the name from the output section of the previous stack
   DataSource:
