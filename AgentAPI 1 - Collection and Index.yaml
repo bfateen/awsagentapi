@@ -9,7 +9,7 @@ Parameters:
 
   AOSSCollectionName:
     Description: Name of the Amazon OpenSearch Service Serverless (AOSS) collection.
-    Default: instantagent-col
+    Default: inagent-kb
     Type: String
     MinLength: 1
     MaxLength: 21
@@ -18,23 +18,8 @@ Parameters:
 
   AOSSIndexName:
     Description: Name of the vector index in the Amazon OpenSearch Service Serverless (AOSS) collection.
-    Default: instantagent-io
+    Default: inagent-io
     Type: String
-
-  KnowledgeBaseName:
-    Default: instantagent-kb
-    Type: String
-    Description: The name of the knowledge base.
-
-  KnowledgeBaseDescription:
-    Default: Answer based only on information contained in knowledge base. 
-    Type: String
-    Description: The description of the knowledge base.
-
-  AgentName:
-    Default: instantagent1
-    Type: String
-    Description: The name of the agent.
 
 Resources:
   # Resources from the first template
@@ -179,7 +164,7 @@ Resources:
   DataAccessPolicy:
     Type: 'AWS::OpenSearchServerless::AccessPolicy'
     Properties:
-      Name: 'instantagent-access-policy2'
+      Name: 'instantagent-access-policy3'
       Type: data
       Description: Access policy for the AOSS collection
       Policy: !Sub >-
@@ -208,7 +193,7 @@ Resources:
       Name: !Join
         - '-'
         - - !Ref AOSSCollectionName
-          - net-policy2
+          - net-policy3
       Type: network
       Description: Network policy for the AOSS collection
       Policy: !Sub >-
@@ -220,7 +205,7 @@ Resources:
       Name: !Join
         - '-'
         - - !Ref AOSSCollectionName
-          - security-policy2
+          - security-policy3
       Type: encryption
       Description: Encryption policy for the AOSS collection
       Policy: !Sub >-
@@ -325,7 +310,7 @@ Resources:
                   
                   logger.info(f"Collection endpoint: {collection_endpoint}")
                   logger.info("Going to sleep")
-                  time.sleep(30)
+                  time.sleep(120)
                   logger.info("Woke up")
 
                   if event['RequestType'] == 'Create' or event['RequestType'] == 'Update':
@@ -333,6 +318,8 @@ Resources:
                   elif event['RequestType'] == 'Delete':
                       delete_index(collection_endpoint, index_name, awsauth)
                   
+                  time.sleep(120)
+
                   send_cfn_response(event, context, 'SUCCESS', {"message": "Operation completed successfully"})
               except Exception as e:
                   logger.error(f"Error occurred: {str(e)}")
@@ -376,3 +363,194 @@ Resources:
                   logger.error(f"Request failed: {e}")
                   if hasattr(e, 'response'):
                       logger.error(f"Response status code: {e.response.status_code}")
+                      logger.error(f"Response body: {e.response.text}")
+                  raise
+
+          def delete_index(endpoint, index_name, awsauth):
+              url = f'{endpoint}/{index_name}'
+              logger.info(f"Attempting to delete index {index_name}")
+              logger.info(f"Request URL: {url}")
+              try:
+                  response = requests.delete(url, auth=awsauth)
+                  logger.info(f"Index deletion response status: {response.status_code}")
+                  logger.info(f"Index deletion response body: {response.text}")
+                  if response.status_code != 404:  # Ignore 404 errors on delete
+                      response.raise_for_status()
+              except requests.exceptions.RequestException as e:
+                  logger.error(f"Request failed: {e}")
+                  if hasattr(e, 'response'):
+                      logger.error(f"Response status code: {e.response.status_code}")
+                      logger.error(f"Response body: {e.response.text}")
+                  if response.status_code != 404:  # Ignore 404 errors on delete
+                      raise
+
+      Runtime: python3.8
+      Timeout: 300
+      MemorySize: 256
+
+  OpenSearchServerlessCollectionPolicyAttachment:
+    Type: Custom::OpenSearchServerlessCollectionPolicyAttachment
+    Properties:
+      ServiceToken: !GetAtt AttachPolicyLambda.Arn
+      CollectionName: !Ref AOSSCollectionName
+      PolicyName: !Ref DataAccessPolicy
+      IAMRoleArn: !GetAtt LambdaExecutionRole.Arn
+    DependsOn: 
+      - Collection
+      - DataAccessPolicy
+
+  AttachPolicyLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import json
+          import traceback
+          import time
+          import random
+          import string
+          import base64
+
+          def generate_policy_version():
+              timestamp = int(time.time())
+              random_string = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+              version_string = f"{timestamp}-{random_string}"
+              return base64.b64encode(version_string.encode()).decode().rstrip('=')
+
+          def handler(event, context):
+              client = boto3.client('opensearchserverless')
+              
+              try:
+                  print(f"Received event: {json.dumps(event)}")
+                  
+                  if event['RequestType'] in ['Create', 'Update']:
+                      policy_name = 'instantagent-access-policy3' #event['ResourceProperties']['PolicyName']
+                      collection_name = event['ResourceProperties']['CollectionName']
+                      iam_role_arn = event['ResourceProperties']['IAMRoleArn']
+                      
+                      # Generate a new policy version
+                      policy_version = generate_policy_version()
+                      print(f"Generated policy version: {policy_version}")
+
+                      print(f"IAM Role ARN: {iam_role_arn}")
+                      # Get the latest policy to avoid version conflicts
+                      existing_policy = client.get_access_policy(name=policy_name, type='data')
+                      print(f"existing Policy content: {json.dumps(existing_policy)}")
+
+                      latest_version = existing_policy['accessPolicyDetail']['policyVersion']
+
+                      print(f"Latest policy version: {latest_version}")
+
+                      # Define the policy
+                      policy = [{
+                          "Rules": [{
+                              "ResourceType": "collection",
+                              "Resource": [f"collection/{collection_name}"],
+                              "Permission": ["aoss:*"]
+                          },
+                          {
+                              "ResourceType": "index",
+                              "Resource": [f"index/{collection_name}/*"],
+                              "Permission": [
+                                "aoss:CreateIndex",
+                                "aoss:UpdateIndex",
+                                "aoss:DescribeIndex",
+                                "aoss:ReadDocument",
+                                "aoss:WriteDocument"
+                            ]
+                          }],
+                          "Principal": [iam_role_arn]
+                      }]
+                      
+                      print(f"Updating policy: {policy_name}")
+                      print(f"Policy content: {json.dumps(policy)}")
+                      
+                      # Update the policy
+                      response = client.update_access_policy(
+                          name=policy_name,
+                          type='data',
+                          description='Updated by CloudFormation',
+                          policy=json.dumps(policy),
+                          policyVersion=latest_version
+                      )
+                      
+                      print(f"Update policy response: {json.dumps(response)}")
+                  
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  print(f"Traceback: {traceback.format_exc()}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+
+      Runtime: python3.8
+      Timeout: 60
+      MemorySize: 128
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: OpenSearchServerlessAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - 'aoss:UpdateAccessPolicy'
+                  - 'aoss:CreateAccessPolicy'
+                  - 'aoss:GetAccessPolicy'
+                  - 'aoss:BatchGetCollection'
+                  - 'aoss:APIAccessAll'
+                  - 'aoss:ListCollections'
+                  - 'aoss:DescribeCollection'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'aoss:CreateIndex'
+                  - 'aoss:UpdateIndex'
+                  - 'aoss:DescribeIndex'
+                  - 'aoss:ReadDocument'
+                  - 'aoss:WriteDocument'
+                Resource: !Sub 'arn:aws:aoss:${AWS::Region}:${AWS::AccountId}:collection/${AOSSCollectionName}'
+
+  
+
+Outputs:
+  S3Bucket:
+    Value: !GetAtt S3Bucket.Arn
+  S3BucketName:
+    Value: !Ref S3Bucket
+  DashboardURL:
+    Value: !GetAtt Collection.DashboardEndpoint
+  AmazonBedrockExecutionRoleForKnowledgeBase:
+    Value: !GetAtt AmazonBedrockExecutionRoleForKnowledgeBase.Arn
+  CollectionARN:
+    Value: !GetAtt Collection.Arn
+  AOSSVectorIndexName:
+    Description: vector index
+    Value: !Ref AOSSIndexName
+  Region:
+    Description: Deployed Region
+    Value: !Ref AWS::Region
+  CreatedIndexName:
+    Description: 'Name of the created vector index'
+    Value: !Ref AOSSIndexName
+  LambdaExecutionRoleArn:
+    Description: 'ARN of the Lambda execution role'
+    Value: !GetAtt LambdaExecutionRole.Arn
+  DataAccessPolicyName:
+    Description: 'Name of the created data access policy'
+    Value: !Ref DataAccessPolicy
