@@ -47,7 +47,9 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              Service: bedrock.amazonaws.com
+              Service: 
+                - bedrock.amazonaws.com
+                - aoss.amazonaws.com
             Action: sts:AssumeRole
             Condition:
               StringEquals:
@@ -55,6 +57,8 @@ Resources:
               ArnLike:
                 "AWS:SourceArn": !Sub "arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*"
       Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonBedrockFullAccess
       Policies:
         - PolicyName: S3ReadOnlyAccess
           PolicyDocument:
@@ -84,11 +88,25 @@ Resources:
               - Effect: Allow
                 Action:
                   - bedrock:ListCustomModels
-                Resource: '*'
-              - Effect: Allow
-                Action:
                   - bedrock:InvokeModel
-                Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/*
+                Resource: '*'
+        - PolicyName: OpenSearchServerlessAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - aoss:CreateCollection
+                  - aoss:DeleteCollection
+                  - aoss:CreateAccessPolicy
+                  - aoss:CreateSecurityPolicy
+                  - aoss:GetAccessPolicy
+                  - aoss:UpdateAccessPolicy
+                  - aoss:BatchGetCollection
+                  - aoss:CreateIndex
+                  - aoss:DeleteIndex
+                  - aoss:UpdateIndex
+                Resource: '*'
 
   DeleteS3Bucket:
     Type: AWS::Lambda::Function
@@ -177,6 +195,7 @@ Resources:
                   ]},
         {"ResourceType":"collection","Resource":["collection/${AOSSCollectionName}"],"Permission":["aoss:*"]}],
         "Principal":["${IAMUserArn}", "${AmazonBedrockExecutionRoleForKnowledgeBase.Arn}", "${LambdaExecutionRole.Arn}"]}]
+    DependsOn: AmazonBedrockExecutionRoleForKnowledgeBase 
 
   Collection:
     Type: 'AWS::OpenSearchServerless::Collection'
@@ -309,16 +328,18 @@ Resources:
                   collection_endpoint = collection_data['collectionEndpoint']
                   
                   logger.info(f"Collection endpoint: {collection_endpoint}")
-                  logger.info("Going to sleep")
-                  time.sleep(120)
-                  logger.info("Woke up")
+                  
 
                   if event['RequestType'] == 'Create' or event['RequestType'] == 'Update':
+                      logger.info("Going to sleep")
+                      time.sleep(120)
+                      logger.info("Woke up")
                       create_vector_index(collection_endpoint, index_name, awsauth)
+                      time.sleep(30)
                   elif event['RequestType'] == 'Delete':
                       delete_index(collection_endpoint, index_name, awsauth)
                   
-                  time.sleep(120)
+                  
 
                   send_cfn_response(event, context, 'SUCCESS', {"message": "Operation completed successfully"})
               except Exception as e:
@@ -395,6 +416,8 @@ Resources:
       CollectionName: !Ref AOSSCollectionName
       PolicyName: !Ref DataAccessPolicy
       IAMRoleArn: !GetAtt LambdaExecutionRole.Arn
+      KBRoleArn: !GetAtt AmazonBedrockExecutionRoleForKnowledgeBase.Arn
+      IAMUserArn: !Ref IAMUserArn
     DependsOn: 
       - Collection
       - DataAccessPolicy
@@ -431,7 +454,9 @@ Resources:
                       policy_name = 'instantagent-access-policy3' #event['ResourceProperties']['PolicyName']
                       collection_name = event['ResourceProperties']['CollectionName']
                       iam_role_arn = event['ResourceProperties']['IAMRoleArn']
-                      
+                      kb_role_arn = event['ResourceProperties']['KBRoleArn']
+                      user_role_arn = event['ResourceProperties']['IAMUserArn']
+
                       # Generate a new policy version
                       policy_version = generate_policy_version()
                       print(f"Generated policy version: {policy_version}")
@@ -460,10 +485,11 @@ Resources:
                                 "aoss:UpdateIndex",
                                 "aoss:DescribeIndex",
                                 "aoss:ReadDocument",
-                                "aoss:WriteDocument"
+                                "aoss:WriteDocument",
+                                "aoss:*"
                             ]
                           }],
-                          "Principal": [iam_role_arn]
+                          "Principal": [iam_role_arn,kb_role_arn,user_role_arn]
                       }]
                       
                       print(f"Updating policy: {policy_name}")
